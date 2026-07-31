@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "kaggle-champion-lineage/v1",
+  "competition": "kaggriculture",
+  "lineage": "claude",
+  "artifact": "submission.tar.gz",
+  "entrypoint": "main.py:agent",
+  "sourceIssue": "SOT-2212"
+}
