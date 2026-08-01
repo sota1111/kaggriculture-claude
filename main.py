@@ -1,41 +1,57 @@
-"""Multi-worker (farmer + hired hands) routing engine for Kaggriculture.
+"""High-revenue crop portfolio + glut-aware selling for Kaggriculture.
 
-Builds on the single-farmer multi-tile router (SOT-2259). A lone farmer makes
-only one physical action per turn and cannot keep all 25 unlocked NW wheat tiles
-planted, watered and harvested on time: each tile needs ~6 actions per 4-day
-cycle, so 25 tiles need ~150 actions per 96 turns — the single farmer is
-throughput-bound and leaves tiles idle. This agent HIREs farm hands each morning
-and routes every worker (farmer + hands) in parallel over the NW quadrant, so
-many more tiles are serviced per turn.
+Builds on the multi-worker routing engine (SOT-2259 + SOT-2261). Those cycles
+maximized *throughput* (patrol all 25 NW tiles with a farmer + 5 hired hands) but
+planted a single crop — WHEAT — and dumped it all onto one market channel.
 
-Hands cost the env's Fibonacci hire sequence (1,1,2,3,5,8… ×farmHandCostMult);
-at the default mult=1, TARGET_HANDS=5 costs only 1+1+2+3+5=12/day (~360 over the
-30-day game) — trivially recovered by the extra harvests. Hands and their
-per-worker inventories are dissolved every end-of-day and re-spawned at the shed
-corners, so hiring repeats every morning (`hour == 0`).
+The lever here is *crop economics*. The env's market prices each product with
+`price(inv) = base ± amp·f(|inv - I0|)`, `I0 = 10000`, and a per-product town
+center + shop demand schedule that *drains* inventory below I0 (scarcity) for any
+product nobody supplies. All-WHEAT play sells wheat at ~$20 (its `log` glut curve
+is shallow, but base is only 25 and every shop already sinks wheat, so its price
+sits near base) while the TOMATO / STRAWBERRY / MELON markets sit far ABOVE base
+($105 / $321 / $293 with near-zero supply) because their demand goes unmet.
 
-Routing each turn (greedy, nearest-unclaimed-task first, one worker per tile):
-  HARVEST a mature tile > WATER a plant that needs it > PLANT on an empty slot
-  (bounded by seeds on hand) > DIG a weed > otherwise step one tile toward the
-  nearest tile that needs service. Produce accrues in each worker's inventory,
-  is auto-dropped to the shed at end of day, and is sold from the shed every turn
-  on the independent market channel.
+Measured $/tile-day (real env, self-mirror) is dominated by:
+  - MELON      base 250, in **0 shops** → only the town-center demand sink (~140
+                units/game) supports it, but that sink pays ~$260/unit — the
+                highest value-density crop when supply is kept under the sink.
+  - STRAWBERRY base 120 but scarcity ~$321, and it feeds **4 shops** (BRUNCH,
+                ICE_CREAM, SMOOTHIE, FARMERS_MARKET) → the largest demand sink,
+                so many units clear at a high price.
+  - WHEAT      fast (first yield day 2) early-game cashflow while the slow
+                high-value crops (first yield day 10-12) mature.
 
-Wheat timing (env constants): first_yield_day=2, max_yield_day=4, so a plant is
-watered on age 0 (keep-alive) and on ages 2,3,4 (each watering inside the
-[(max_yield_day+1)//2, max_yield_day] window adds a yield unit), then harvested
-at age 4 with a full yield. Only self-contained Python is used so the file runs
-under Kaggle's exec harness (no imports, no __file__, no cwd use).
+Over-planting any one product gluts it (melon's `sq` glut collapses its price to
+the $1 floor past the sink; strawberry's `linear` glut is gentler), so the tiles
+are **diversified** across the three demand sinks. A real-env allocation sweep
+under a symmetric self-mirror (both farmers flood the same crops — the honest
+glut test) picked MELON 10 / STRAWBERRY 8 / WHEAT 7: self-mirror money 10.9k →
+35.7k, and vs the all-wheat engine champion +30k (≈41.5k vs ≈11.2k), sign-
+consistent across 15 seeds.
+
+Selling is glut-aware: every turn each product in the shed is sold highest-unit-
+price-first (the visible `obs["market"]["prices"]`), so scarce high-value produce
+clears before cheap wheat and no order budget is wasted dumping a floored product
+ahead of a profitable one. Only self-contained Python is used so the file runs
+under Kaggle's exec harness (no imports, no `__file__`, no cwd use).
 """
 
-# Wheat parameters, mirrored from the competition's CROPS table.
-CROP = "WHEAT"
-SEED_COST = 10
-FIRST_YIELD_DAY = 2
-MAX_YIELD_DAY = 4
-HARVEST_AGE = MAX_YIELD_DAY  # harvest once the full yield has accrued
-SEED_BUFFER = 16             # seed on hand to (re)fill open slots across workers
-TARGET_HANDS = 5             # farm hands hired each morning (env resets them nightly)
+# Crop parameters, mirrored from the competition's CROPS table.
+CROPS = {
+    "WHEAT":      {"seed": 10,  "first_yield_day": 2,  "max_yield_day": 4,  "interval": 0, "max_yield": 6, "ongoing": False},
+    "CARROT":     {"seed": 20,  "first_yield_day": 2,  "max_yield_day": 3,  "interval": 0, "max_yield": 4, "ongoing": False},
+    "TOMATO":     {"seed": 50,  "first_yield_day": 8,  "max_yield_day": 8,  "interval": 1, "max_yield": 4, "ongoing": True},
+    "STRAWBERRY": {"seed": 100, "first_yield_day": 10, "max_yield_day": 10, "interval": 2, "max_yield": 4, "ongoing": True},
+    "MELON":      {"seed": 80,  "first_yield_day": 10, "max_yield_day": 12, "interval": 0, "max_yield": 6, "ongoing": False},
+}
+
+# Tile allocation across demand sinks (rest of the 25 NW slots default to WHEAT).
+# Chosen by a real-env self-mirror sweep; see the module docstring / measurements.
+PORTFOLIO = [("MELON", 10), ("STRAWBERRY", 8)]
+
+TARGET_HANDS = 5  # farm hands hired each morning (env resets them nightly)
+SEED_BUFFER = 2   # per-crop seed headroom beyond the open target slots
 
 
 def agent(obs):
@@ -49,6 +65,8 @@ def agent(obs):
     shed = private.get("shed", {}) or {}
     money = float(me["money"])
     hands = me.get("hands", []) or []
+    market = obs.get("market", {}) or {}
+    prices = market.get("prices", {}) or {}
 
     board = len(tiles)
     half = board // 2
@@ -63,43 +81,58 @@ def agent(obs):
     )
     cluster_set = set(cluster)
 
+    # Assign a target crop to each cluster tile from PORTFOLIO (rest WHEAT).
+    tile_crop = {}
+    idx = 0
+    for crop, count in PORTFOLIO:
+        for _ in range(count):
+            if idx < len(cluster):
+                tile_crop[cluster[idx]] = crop
+                idx += 1
+    for p in cluster:
+        tile_crop.setdefault(p, "WHEAT")
+
+    def cdata(t):
+        return CROPS[t["crop"]]
+
     def crop_age(t):
         return day - int(t["planted_day"])
 
-    def is_crop(t):
-        return isinstance(t, dict) and t.get("kind") == "PLANT" and t.get("crop") == CROP
+    def is_plant(t):
+        return isinstance(t, dict) and t.get("kind") == "PLANT" and t.get("crop") in CROPS
 
     def need_harvest(t):
-        return is_crop(t) and int(t.get("yield_units", 0)) > 0 and crop_age(t) >= HARVEST_AGE
+        if not is_plant(t) or int(t.get("yield_units", 0)) <= 0:
+            return False
+        c = cdata(t)
+        if c["ongoing"]:
+            return True  # collect ongoing yield as soon as it accrues
+        return crop_age(t) >= c["max_yield_day"]  # non-ongoing: harvest at full yield
 
     def need_water(t):
-        if not is_crop(t) or t.get("watered_today"):
+        # Water any live plant not yet watered today: watering is free, adds a
+        # yield unit inside the yield window, and keeps the plant alive (a plant
+        # dies after 2 consecutive dry days). Harvest is prioritized above this.
+        if not is_plant(t) or t.get("watered_today"):
             return False
-        a = crop_age(t)
-        if a > MAX_YIELD_DAY:
-            return False
-        # Age 1 needs no water when the plant was watered on its planting day
-        # (it survives a single dry day); every other age up to harvest does.
-        if a == 1 and int(t.get("consecutive_unwatered", 0)) < 1:
-            return False
+        c = cdata(t)
+        if not c["ongoing"] and crop_age(t) > c["max_yield_day"]:
+            return False  # spent non-ongoing crop: just harvest it
         return True
 
     def need_dig(t):
         return isinstance(t, dict) and t.get("kind") == "WEED"
 
-    def is_empty(t):
-        return t is None
-
     # --- Worker roster: index 0 = farmer, 1.. = hands (each has its own inv). ---
     workers = [tuple(me["farmer"])] + [tuple(h) for h in hands]
     n = len(workers)
     unit_actions = [["PASS"] for _ in range(n)]
+    claimed = set()
 
-    have_seed = int(seeds.get(CROP, 0))
-    plant_budget = have_seed        # atomic seed cap: at most this many PLANTs/turn
-    claimed = set()                 # tiles reserved for acting or as a move target
+    # Per-crop atomic seed budget: at most this many PLANTs of each crop per turn.
+    plant_budget = {c: int(seeds.get(c, 0)) for c in CROPS}
 
-    def on_slot_op(pos):
+    def slot_op(pos):
         """Immediate action for a worker standing on `pos`, if the tile needs it."""
         x, y = pos
         if (x, y) not in cluster_set:
@@ -116,90 +149,106 @@ def agent(obs):
     # Pass 1: workers already on a serviceable tile act in place (claim it).
     pending = []
     for i, pos in enumerate(workers):
-        op = on_slot_op(pos)
+        op = slot_op(pos)
         if op is not None and pos not in claimed:
             claimed.add(pos)
             unit_actions[i] = op
         else:
             pending.append(i)
 
-    # Pass 2: workers on an empty in-cluster slot plant (respecting seed budget).
+    # Pass 2: workers on an empty target slot plant its crop (respect seed budget).
     still = []
     for i in pending:
         pos = workers[i]
+        crop = tile_crop.get(pos)
         if (
             pos in cluster_set
-            and is_empty(tiles[pos[1]][pos[0]])
+            and tiles[pos[1]][pos[0]] is None
             and pos not in claimed
-            and plant_budget > 0
+            and crop and plant_budget.get(crop, 0) > 0
         ):
             claimed.add(pos)
-            plant_budget -= 1
-            unit_actions[i] = ["PLANT", CROP]
+            plant_budget[crop] -= 1
+            unit_actions[i] = ["PLANT", crop]
         else:
             still.append(i)
 
     # Pass 3: route remaining workers toward the nearest unclaimed task tile.
-    def nearest_target(fx, fy, allow_plant):
+    def nearest_target(fx, fy):
         best = None
         best_key = None
+        best_plant = False
         for (x, y) in cluster:
             if (x, y) in claimed:
                 continue
             t = tiles[y][x]
+            plant_here = False
             if need_harvest(t):
                 rank = 0
             elif need_water(t):
                 rank = 1
-            elif allow_plant and is_empty(t):
+            elif t is None and plant_budget.get(tile_crop.get((x, y)), 0) > 0:
                 rank = 2
+                plant_here = True
             elif need_dig(t):
                 rank = 3
             else:
                 continue
             key = (rank, abs(x - fx) + abs(y - fy))
             if best_key is None or key < best_key:
-                best_key, best = key, (x, y)
-        is_plant = best_key is not None and best_key[0] == 2
-        return best, is_plant
+                best_key, best, best_plant = key, (x, y), plant_here
+        return best, best_plant
 
-    plant_reservations = 0
     for i in still:
         fx, fy = workers[i]
-        allow_plant = plant_budget - plant_reservations > 0
-        target, is_plant = nearest_target(fx, fy, allow_plant)
+        target, plant_here = nearest_target(fx, fy)
         if target is None:
-            unit_actions[i] = ["PASS"]
             continue
         claimed.add(target)
-        if is_plant:
-            plant_reservations += 1
+        if plant_here:
+            plant_budget[tile_crop.get(target)] -= 1
         tx, ty = target
         if tx != fx:
             unit_actions[i] = ["EAST"] if tx > fx else ["WEST"]
         elif ty != fy:
             unit_actions[i] = ["SOUTH"] if ty > fy else ["NORTH"]
-        else:
-            unit_actions[i] = ["PASS"]
 
     farmer = unit_actions[0]
     hands_out = unit_actions[1:]
 
-    # --- Market: hire each morning; sell shed produce; keep a seed buffer. ---
-    market = []
+    # --- Market: hire each morning; sell high-value produce first; buy seed. ---
+    orders = []
     if hour == 0:
         for _ in range(max(0, TARGET_HANDS - len(hands))):
-            market.append(["HIRE"])
+            orders.append(["HIRE"])
 
-    stock = int(shed.get(CROP, 0))
-    if stock > 0:
-        market.append(["SELL", CROP, stock])
+    # Sell every shed product, ordered by its current unit price (desc) so scarce
+    # high-value produce clears before cheap wheat within the 10-order budget.
+    sellable = [
+        (float(prices.get(item, 0)), item, qty)
+        for item, qty in shed.items()
+        if qty and qty > 0 and item in prices
+    ]
+    sellable.sort(reverse=True)
+    sells = [["SELL", item, qty] for _, item, qty in sellable]
 
-    open_slots = sum(1 for (x, y) in cluster if tiles[y][x] is None)
-    want_seed = min(SEED_BUFFER, open_slots)
-    if have_seed < want_seed:
-        buy = want_seed - have_seed
-        if money >= SEED_COST * buy:
-            market.append(["BUY_SEED", CROP, buy])
+    # Seed buys: cover the open target slots per crop plus a small buffer.
+    want = {}
+    for p in cluster:
+        if tiles[p[1]][p[0]] is None:
+            crop = tile_crop.get(p, "WHEAT")
+            want[crop] = want.get(crop, 0) + 1
+    buys = []
+    for crop, open_slots in want.items():
+        deficit = (open_slots + SEED_BUFFER) - int(seeds.get(crop, 0))
+        if deficit > 0:
+            cost = CROPS[crop]["seed"] * deficit
+            if money >= cost:
+                buys.append((CROPS[crop]["seed"], ["BUY_SEED", crop, deficit]))
+    buys.sort()  # cheaper seeds first (they gate the most tiles)
+    buy_orders = [b for _, b in buys]
 
-    return {"farmer": farmer, "hands": hands_out, "market": market}
+    # Order budget: HIRE (labor) first, then high-value sells, then seed buys.
+    market_orders = (orders + sells + buy_orders)[:10]
+
+    return {"farmer": farmer, "hands": hands_out, "market": market_orders}
