@@ -4,5 +4,5 @@
   "lineage": "claude",
   "artifact": "submission.tar.gz",
   "entrypoint": "main.py:agent",
-  "sourceIssue": "SOT-2212"
+  "sourceIssue": "SOT-2259"
 }
