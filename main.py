@@ -30,12 +30,27 @@ glut test) picked MELON 10 / STRAWBERRY 8 / WHEAT 7: self-mirror money 10.9k →
 35.7k, and vs the all-wheat engine champion +30k (≈41.5k vs ≈11.2k), sign-
 consistent across 15 seeds.
 
-Selling is glut-aware: every turn each product in the shed is sold highest-unit-
-price-first (the visible `obs["market"]["prices"]`), so scarce high-value produce
-clears before cheap wheat and no order budget is wasted dumping a floored product
-ahead of a profitable one. Only self-contained Python is used so the file runs
-under Kaggle's exec harness (no imports, no `__file__`, no cwd use).
+Selling is glut-aware and *rationed to the demand drains* (SOT-2298). Every turn each
+product in the shed is sold highest-unit-price-first (the visible
+`obs["market"]["prices"]`), so scarce high-value produce clears before cheap wheat and
+no order budget is wasted dumping a floored product ahead of a profitable one. On top
+of that, the per-turn sell *quantity* of each product is metered: because every SELL
+raises `market["inventory"]` by 1 and `price(inv) = base ± amp·f(|inv - I0|)`, dumping
+a whole harvest burst pushes inventory well above `I0 = 10000` and each extra unit
+sells cheaper. MELON is the pinch point — `above_func = sq`, `above_target = 3.60` →
+`price = 250 - 0.01·(inv - I0)²`, so a burst that shoves melon to `I0+100` collapses its
+price to ~$150 (and to the $1 floor by `I0+158`). The metering holds back the units
+whose *marginal* price would fall below `SELL_FLOOR_FRAC · base`, leaving them in the
+shed for a later turn after the town center's 12-step / late-game 4× demand drains have
+pulled inventory back down (re-opening scarcity-premium headroom). Nothing is left to
+rot: on the final game day everything in the shed is liquidated (unsold shed value does
+NOT count toward final money). Measured self-mirror (honest glut) lifts melon's average
+clear price 206.8 → 216.9 (+$1.2k/player, same 120 melons sold) and beats the
+all-dump champion on every seed. Only `math` is imported so the file runs under Kaggle's
+exec harness (no `__file__`, no cwd use).
 """
+
+import math
 
 # Crop parameters, mirrored from the competition's CROPS table.
 CROPS = {
@@ -52,6 +67,76 @@ PORTFOLIO = [("MELON", 10), ("STRAWBERRY", 8)]
 
 TARGET_HANDS = 5  # farm hands hired each morning (env resets them nightly)
 SEED_BUFFER = 2   # per-crop seed headroom beyond the open target slots
+
+# --- Sell metering (SOT-2298): ration sells to the demand drains, avoid glut. ---
+# Hold back any unit whose marginal sell price would drop below SELL_FLOOR_FRAC · base
+# (keeping market inventory near/under I0 = scarcity-premium territory); dump the held
+# remainder on the final day so nothing rots (unsold shed = $0 at game end). Swept on
+# the real env (self-mirror honest-glut + vs-champion, seeds 1-5/101-505/7-99 + fresh
+# holdouts): 0.85 / final-day-liquidate wins every seed; a too-high frac starves sells
+# and never-liquidate (LIQ past the last day) strands melon at $0.
+SELL_FLOOR_FRAC = 0.85
+LIQUIDATE_DAY = 29  # last game day (episodeSteps 720 / turnsPerDay 24 → days 0..29)
+
+# Market pricing table, mirrored from the env's MARKET_PARAMS (base / I0 / T and the
+# below/above shape + target that set amp = target · base / f(T)). Used only to predict
+# the marginal sell price so we can meter quantity; the env remains the source of truth.
+_MARKET = {
+    "WHEAT":      {"base":  25, "I0": 10000, "T": 400, "bf": "sqrt",   "bt": 0.80, "af": "log",    "at": 0.20},
+    "CARROT":     {"base":  35, "I0": 10000, "T": 450, "bf": "log",    "bt": 0.20, "af": "sqrt",   "at": 0.70},
+    "TOMATO":     {"base":  60, "I0": 10000, "T": 200, "bf": "linear", "bt": 0.40, "af": "sqrt",   "at": 0.60},
+    "STRAWBERRY": {"base": 120, "I0": 10000, "T": 100, "bf": "sqrt",   "bt": 0.70, "af": "linear", "at": 1.60},
+    "MELON":      {"base": 250, "I0": 10000, "T": 300, "bf": "log",    "bt": 0.20, "af": "sq",     "at": 3.60},
+    "EGG":        {"base":  50, "I0": 10000, "T": 332, "bf": "linear", "bt": 0.40, "af": "log",    "at": 0.20},
+    "MILK":       {"base": 160, "I0": 10000, "T": 122, "bf": "sqrt",   "bt": 0.60, "af": "linear", "at": 1.60},
+    "WOOL":       {"base": 200, "I0": 10000, "T": 105, "bf": "log",    "bt": 0.20, "af": "sq",     "at": 3.20},
+    "FERTILIZER": {"base": 100, "I0": 10000, "T": 200, "bf": "linear", "bt": 0.40, "af": "linear", "at": 0.40},
+}
+
+
+def _shape(func, x):
+    x = x if x > 0 else 0.0
+    if func == "linear": return x
+    if func == "sq":     return x * x
+    if func == "sqrt":   return math.sqrt(x)
+    if func == "log":    return math.log(1.0 + x)
+    return x
+
+
+def _market_price(item, inv):
+    """Predicted unit price at market inventory `inv` (mirrors env market_price)."""
+    p = _MARKET.get(item)
+    if p is None:
+        return None
+    base, i0, t = p["base"], p["I0"], p["T"]
+    if inv < i0:
+        amp = p["bt"] * base / _shape(p["bf"], t)
+        price = base + amp * _shape(p["bf"], i0 - inv)
+    else:
+        amp = p["at"] * base / _shape(p["af"], t)
+        price = base - amp * _shape(p["af"], inv - i0)
+    return max(1, int(round(price)))
+
+
+def _meter_sell_qty(item, qty, inv0, day):
+    """Units of `item` to sell this turn: hold those whose marginal price < floor.
+
+    Selling raises market inventory by 1 per unit, so unit j clears at price(inv0 + j).
+    Stop once that marginal price drops below SELL_FLOOR_FRAC · base — the held units
+    wait for the town drains to reopen headroom. On the final day, dump everything.
+    """
+    if day >= LIQUIDATE_DAY:
+        return qty
+    p = _MARKET.get(item)
+    if p is None:
+        return qty
+    threshold = SELL_FLOOR_FRAC * p["base"]
+    inv = int(inv0)
+    k = 0
+    while k < qty and _market_price(item, inv) >= threshold:
+        k += 1
+        inv += 1
+    return k
 
 
 def agent(obs):
@@ -224,11 +309,15 @@ def agent(obs):
 
     # Sell every shed product, ordered by its current unit price (desc) so scarce
     # high-value produce clears before cheap wheat within the 10-order budget.
-    sellable = [
-        (float(prices.get(item, 0)), item, qty)
-        for item, qty in shed.items()
-        if qty and qty > 0 and item in prices
-    ]
+    inventory = market.get("inventory", {}) or {}
+    sellable = []
+    for item, qty in shed.items():
+        if not (qty and qty > 0 and item in prices):
+            continue
+        inv0 = inventory.get(item, 10000)
+        sell_qty = _meter_sell_qty(item, int(qty), inv0, day)
+        if sell_qty > 0:
+            sellable.append((float(prices.get(item, 0)), item, sell_qty))
     sellable.sort(reverse=True)
     sells = [["SELL", item, qty] for _, item, qty in sellable]
 
