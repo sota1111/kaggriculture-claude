@@ -1,53 +1,31 @@
-"""High-revenue crop portfolio + glut-aware selling for Kaggriculture.
+"""High-revenue crop portfolio + glut-aware selling + animal husbandry for Kaggriculture.
 
-Builds on the multi-worker routing engine (SOT-2259 + SOT-2261). Those cycles
-maximized *throughput* (patrol all 25 NW tiles with a farmer + 5 hired hands) but
-planted a single crop — WHEAT — and dumped it all onto one market channel.
+Builds on the multi-worker routing engine (SOT-2259 + SOT-2261), the crop-economics
+portfolio (SOT-2260), and glut-aware rationed selling (SOT-2298). Those cycles maximized
+crop revenue: patrol all 25 NW tiles, plant the high-value MELON / STRAWBERRY demand
+sinks, and meter sells so scarce produce clears above the market floor.
 
-The lever here is *crop economics*. The env's market prices each product with
-`price(inv) = base ± amp·f(|inv - I0|)`, `I0 = 10000`, and a per-product town
-center + shop demand schedule that *drains* inventory below I0 (scarcity) for any
-product nobody supplies. All-WHEAT play sells wheat at ~$20 (its `log` glut curve
-is shallow, but base is only 25 and every shop already sinks wheat, so its price
-sits near base) while the TOMATO / STRAWBERRY / MELON markets sit far ABOVE base
-($105 / $321 / $293 with near-zero supply) because their demand goes unmet.
+The lever here (SOT-2297) is **animal husbandry** — an *exclusive* demand sink the
+opponent cannot free-ride. The prior land-expansion cycle (SOT-2299) was competitively
+dominated: expanding into MELON / STRAWBERRY loses head-to-head because the non-expanding
+champion free-rides the same shared crop sink (tragedy of the commons). Its recorded
+conclusion: retry only with a sink the champion supplies **zero** of, whose revenue beats
+its labor cost. `EGG` / `MILK` / `WOOL` come only from `ANIMALS` (`GOOSE→EGG`,
+`COW→MILK`, `SHEEP→WOOL`); the crop-only champion never touches those markets, so their
+town-center + shop demand keeps them scarce and high-priced (self-mirror end-market
+diagnosis: MILK ≈ $351, WOOL ≈ $247, both scarce with zero supply). MILK (base 160,
+`sqrt` scarcity) and WOOL (base 200) are the value targets; EGG (base 50, shallow `linear`
+scarcity) is marginal.
 
-Measured $/tile-day (real env, self-mirror) is dominated by:
-  - MELON      base 250, in **0 shops** → only the town-center demand sink (~140
-                units/game) supports it, but that sink pays ~$260/unit — the
-                highest value-density crop when supply is kept under the sink.
-  - STRAWBERRY base 120 but scarcity ~$321, and it feeds **4 shops** (BRUNCH,
-                ICE_CREAM, SMOOTHIE, FARMERS_MARKET) → the largest demand sink,
-                so many units clear at a high price.
-  - WHEAT      fast (first yield day 2) early-game cashflow while the slow
-                high-value crops (first yield day 10-12) mature.
-
-Over-planting any one product gluts it (melon's `sq` glut collapses its price to
-the $1 floor past the sink; strawberry's `linear` glut is gentler), so the tiles
-are **diversified** across the three demand sinks. A real-env allocation sweep
-under a symmetric self-mirror (both farmers flood the same crops — the honest
-glut test) picked MELON 10 / STRAWBERRY 8 / WHEAT 7: self-mirror money 10.9k →
-35.7k, and vs the all-wheat engine champion +30k (≈41.5k vs ≈11.2k), sign-
-consistent across 15 seeds.
-
-Selling is glut-aware and *rationed to the demand drains* (SOT-2298). Every turn each
-product in the shed is sold highest-unit-price-first (the visible
-`obs["market"]["prices"]`), so scarce high-value produce clears before cheap wheat and
-no order budget is wasted dumping a floored product ahead of a profitable one. On top
-of that, the per-turn sell *quantity* of each product is metered: because every SELL
-raises `market["inventory"]` by 1 and `price(inv) = base ± amp·f(|inv - I0|)`, dumping
-a whole harvest burst pushes inventory well above `I0 = 10000` and each extra unit
-sells cheaper. MELON is the pinch point — `above_func = sq`, `above_target = 3.60` →
-`price = 250 - 0.01·(inv - I0)²`, so a burst that shoves melon to `I0+100` collapses its
-price to ~$150 (and to the $1 floor by `I0+158`). The metering holds back the units
-whose *marginal* price would fall below `SELL_FLOOR_FRAC · base`, leaving them in the
-shed for a later turn after the town center's 12-step / late-game 4× demand drains have
-pulled inventory back down (re-opening scarcity-premium headroom). Nothing is left to
-rot: on the final game day everything in the shed is liquidated (unsold shed value does
-NOT count toward final money). Measured self-mirror (honest glut) lifts melon's average
-clear price 206.8 → 216.9 (+$1.2k/player, same 120 melons sold) and beats the
-all-dump champion on every seed. Only `math` is imported so the file runs under Kaggle's
-exec harness (no `__file__`, no cwd use).
+Implementation: a few of the low-value WHEAT tiles (the high-value MELON 10 / STRAWBERRY 8
+allocation is preserved) are converted to COOP / PASTURE structures near the shed. A small
+set of dedicated *rancher* workers builds the structures, buys + places the animals, and
+each day feeds (1 WHEAT/animal, drawn from the shed — a wheat reserve is held back from
+selling), cares (a fed-day-only yield bonus), and harvests the product into the shed for
+the existing glut-aware seller. The env animal constants (first-yield/interval/max_held,
+wheat feed, care-on-fed-only) are mirrored exactly. Non-rancher workers and the non-animal
+tiles keep the unchanged crop engine. Only `math` is imported so the file runs under
+Kaggle's exec harness (no `__file__`, no cwd use).
 """
 
 import math
@@ -61,20 +39,32 @@ CROPS = {
     "MELON":      {"seed": 80,  "first_yield_day": 10, "max_yield_day": 12, "interval": 0, "max_yield": 6, "ongoing": False},
 }
 
-# Tile allocation across demand sinks (rest of the 25 NW slots default to WHEAT).
+# Animal parameters, mirrored from the competition's ANIMALS table.
+ANIMALS = {
+    "GOOSE": {"cost": 300, "structure": "COOP",    "first_yield_day": 4, "interval": 1, "max_held": 4, "product": "EGG"},
+    "COW":   {"cost": 400, "structure": "PASTURE", "first_yield_day": 8, "interval": 2, "max_held": 6, "product": "MILK"},
+    "SHEEP": {"cost": 500, "structure": "PASTURE", "first_yield_day": 6, "interval": 3, "max_held": 6, "product": "WOOL"},
+}
+_BUILD_OP = {"COOP": "BUILD_COOP", "PASTURE": "BUILD_PASTURE"}
+
+# Tile allocation across demand sinks (rest of the open NW slots default to WHEAT).
 # Chosen by a real-env self-mirror sweep; see the module docstring / measurements.
 PORTFOLIO = [("MELON", 10), ("STRAWBERRY", 8)]
 
-TARGET_HANDS = 5  # farm hands hired each morning (env resets them nightly)
+# Animal husbandry plan (SOT-2297): (animal, count). Structures occupy the NW tiles
+# nearest the shed so ranchers tour them cheaply. Swept on the real env; MILK/WOOL are
+# the value targets, EGG (GOOSE) is marginal so kept small or omitted.
+ANIMAL_PLAN = [("COW", 2), ("SHEEP", 2)]
+N_RANCHERS = 2               # dedicated animal-chore workers (rest patrol crops)
+WHEAT_FEED_RESERVE_DAYS = 3  # shed wheat held back from selling to guarantee feed
+
+TARGET_HANDS = 6  # farm hands hired each morning (env resets them nightly)
 SEED_BUFFER = 2   # per-crop seed headroom beyond the open target slots
 
 # --- Sell metering (SOT-2298): ration sells to the demand drains, avoid glut. ---
 # Hold back any unit whose marginal sell price would drop below SELL_FLOOR_FRAC · base
 # (keeping market inventory near/under I0 = scarcity-premium territory); dump the held
-# remainder on the final day so nothing rots (unsold shed = $0 at game end). Swept on
-# the real env (self-mirror honest-glut + vs-champion, seeds 1-5/101-505/7-99 + fresh
-# holdouts): 0.85 / final-day-liquidate wins every seed; a too-high frac starves sells
-# and never-liquidate (LIQ past the last day) strands melon at $0.
+# remainder on the final day so nothing rots (unsold shed = $0 at game end).
 SELL_FLOOR_FRAC = 0.85
 LIQUIDATE_DAY = 29  # last game day (episodeSteps 720 / turnsPerDay 24 → days 0..29)
 
@@ -125,6 +115,8 @@ def _meter_sell_qty(item, qty, inv0, day):
     Stop once that marginal price drops below SELL_FLOOR_FRAC · base — the held units
     wait for the town drains to reopen headroom. On the final day, dump everything.
     """
+    if qty <= 0:
+        return 0
     if day >= LIQUIDATE_DAY:
         return qty
     p = _MARKET.get(item)
@@ -148,10 +140,12 @@ def agent(obs):
     tiles = me["tiles"]
     seeds = private.get("seeds", {}) or {}
     shed = private.get("shed", {}) or {}
+    inventories = private.get("inventories", []) or []
     money = float(me["money"])
     hands = me.get("hands", []) or []
     market = obs.get("market", {}) or {}
     prices = market.get("prices", {}) or {}
+    inventory = market.get("inventory", {}) or {}
 
     board = len(tiles)
     half = board // 2
@@ -164,17 +158,30 @@ def agent(obs):
         ((x, y) for x in range(half) for y in range(half)),
         key=lambda p: (abs(p[0] - spawn_x) + abs(p[1] - spawn_y), p),
     )
-    cluster_set = set(cluster)
 
-    # Assign a target crop to each cluster tile from PORTFOLIO (rest WHEAT).
+    # --- Animal tiles: the nearest cluster tiles to the shed (excluding the spawn
+    # tile itself, which stays a clean pickup/logistics slot). ---
+    animal_assign = {}   # (x, y) -> animal name
+    ranch_candidates = [p for p in cluster if p != (spawn_x, spawn_y)]
+    ai = 0
+    for animal, count in ANIMAL_PLAN:
+        for _ in range(count):
+            if ai < len(ranch_candidates):
+                animal_assign[ranch_candidates[ai]] = animal
+                ai += 1
+    animal_tiles = set(animal_assign)
+
+    # Crop tiles = the rest of the cluster; assign the crop portfolio (rest WHEAT).
+    crop_cluster = [p for p in cluster if p not in animal_tiles]
+    crop_cluster_set = set(crop_cluster)
     tile_crop = {}
     idx = 0
     for crop, count in PORTFOLIO:
         for _ in range(count):
-            if idx < len(cluster):
-                tile_crop[cluster[idx]] = crop
+            if idx < len(crop_cluster):
+                tile_crop[crop_cluster[idx]] = crop
                 idx += 1
-    for p in cluster:
+    for p in crop_cluster:
         tile_crop.setdefault(p, "WHEAT")
 
     def cdata(t):
@@ -185,6 +192,12 @@ def agent(obs):
 
     def is_plant(t):
         return isinstance(t, dict) and t.get("kind") == "PLANT" and t.get("crop") in CROPS
+
+    def is_animal(t):
+        return isinstance(t, dict) and "animal" in t
+
+    def is_structure(t):
+        return isinstance(t, dict) and t.get("kind") in _BUILD_OP and "animal" not in t
 
     def need_harvest(t):
         if not is_plant(t) or int(t.get("yield_units", 0)) <= 0:
@@ -212,15 +225,126 @@ def agent(obs):
     workers = [tuple(me["farmer"])] + [tuple(h) for h in hands]
     n = len(workers)
     unit_actions = [["PASS"] for _ in range(n)]
-    claimed = set()
+    claimed = set()      # tiles claimed this turn
+    busy = set()         # worker indices already assigned an action
 
-    # Per-crop atomic seed budget: at most this many PLANTs of each crop per turn.
+    def worker_inv(i):
+        if 0 <= i < len(inventories) and isinstance(inventories[i], dict):
+            return inventories[i]
+        return {}
+
+    # =====================================================================
+    # RANCH PASS (SOT-2297): dedicate the last N_RANCHERS workers to animals.
+    # Ranchers build structures, place bought animals, and each day feed / care /
+    # harvest. A rancher with no reachable animal chore falls through to crops.
+    # =====================================================================
+    n_placed = {a: 0 for a in ANIMALS}
+    for (x, y), animal in animal_assign.items():
+        t = tiles[y][x]
+        if is_animal(t) and t.get("animal") == animal:
+            n_placed[animal] += 1
+
+    def _step_towards(fx, fy, tx, ty):
+        if tx != fx:
+            return ["EAST"] if tx > fx else ["WEST"]
+        if ty != fy:
+            return ["SOUTH"] if ty > fy else ["NORTH"]
+        return None
+
+    def ranch_action(i):
+        """Best animal chore (or a step toward it) for rancher `i`; None if idle."""
+        fx, fy = workers[i]
+        inv_i = worker_inv(i)
+        wheat = int(inv_i.get("WHEAT", 0))
+        at_shed = (fx, fy) == (spawn_x, spawn_y)
+
+        # 1. Act in place if standing on one of my animal tiles.
+        if (fx, fy) in animal_assign:
+            animal = animal_assign[(fx, fy)]
+            t = tiles[fy][fx]
+            struct = ANIMALS[animal]["structure"]
+            if t is None:
+                claimed.add((fx, fy))
+                return [_BUILD_OP[struct]]
+            if is_structure(t) and t.get("kind") == struct and int(inv_i.get(animal, 0)) > 0:
+                claimed.add((fx, fy))
+                return ["PLACE", animal]
+            if is_animal(t) and t.get("animal") == animal:
+                if not t.get("fed_today") and wheat > 0:
+                    claimed.add((fx, fy))
+                    return ["FEED"]
+                if int(t.get("yield_units", 0)) > 0:
+                    claimed.add((fx, fy))
+                    return ["HARVEST"]
+                if t.get("fed_today") and not t.get("cared_today"):
+                    claimed.add((fx, fy))
+                    return ["CARE"]
+
+        # 2. Restock at the shed when I lack the item a pending chore needs.
+        need_feed = any(
+            is_animal(tiles[y][x]) and not tiles[y][x].get("fed_today")
+            for (x, y) in animal_assign
+        )
+        want_animal = None
+        for (x, y), animal in animal_assign.items():
+            t = tiles[y][x]
+            if (t is None or is_structure(t)) and int(inv_i.get(animal, 0)) == 0 \
+               and int(shed.get(animal, 0)) > 0:
+                want_animal = animal
+                break
+        if (need_feed and wheat == 0) or want_animal is not None:
+            if at_shed:
+                if want_animal is not None:
+                    return ["PICKUP", want_animal, 1]
+                take = len(animal_tiles) + 1
+                if int(shed.get("WHEAT", 0)) > 0:
+                    return ["PICKUP", "WHEAT", take]
+                return None  # nothing to pick up yet
+            mv = _step_towards(fx, fy, spawn_x, spawn_y)
+            if mv:
+                return mv
+
+        # 3. Route toward the nearest actionable animal tile.
+        best, best_key = None, None
+        for (x, y), animal in animal_assign.items():
+            if (x, y) in claimed:
+                continue
+            t = tiles[y][x]
+            if t is None:
+                rank = 3                      # build
+            elif is_structure(t) and int(inv_i.get(animal, 0)) > 0:
+                rank = 2                      # place
+            elif is_animal(t) and t.get("animal") == animal and (
+                (not t.get("fed_today") and wheat > 0)
+                or int(t.get("yield_units", 0)) > 0
+                or (t.get("fed_today") and not t.get("cared_today"))
+            ):
+                rank = 0 if not t.get("fed_today") else 1  # feed first, else harvest/care
+            else:
+                continue
+            key = (rank, abs(x - fx) + abs(y - fy))
+            if best_key is None or key < best_key:
+                best_key, best = key, (x, y)
+        if best is not None:
+            claimed.add(best)
+            return _step_towards(fx, fy, best[0], best[1])
+        return None
+
+    ranchers = list(range(max(1, n - N_RANCHERS), n)) if n > 1 else []
+    for i in ranchers:
+        act = ranch_action(i)
+        if act is not None:
+            unit_actions[i] = act
+            busy.add(i)
+
+    # =====================================================================
+    # CROP PASSES: unchanged engine over the non-ranch workers + crop tiles.
+    # =====================================================================
     plant_budget = {c: int(seeds.get(c, 0)) for c in CROPS}
 
     def slot_op(pos):
-        """Immediate action for a worker standing on `pos`, if the tile needs it."""
         x, y = pos
-        if (x, y) not in cluster_set:
+        if (x, y) not in crop_cluster_set:
             return None
         t = tiles[y][x]
         if need_harvest(t):
@@ -233,11 +357,15 @@ def agent(obs):
 
     # Pass 1: workers already on a serviceable tile act in place (claim it).
     pending = []
-    for i, pos in enumerate(workers):
+    for i in range(n):
+        if i in busy:
+            continue
+        pos = workers[i]
         op = slot_op(pos)
         if op is not None and pos not in claimed:
             claimed.add(pos)
             unit_actions[i] = op
+            busy.add(i)
         else:
             pending.append(i)
 
@@ -247,7 +375,7 @@ def agent(obs):
         pos = workers[i]
         crop = tile_crop.get(pos)
         if (
-            pos in cluster_set
+            pos in crop_cluster_set
             and tiles[pos[1]][pos[0]] is None
             and pos not in claimed
             and crop and plant_budget.get(crop, 0) > 0
@@ -263,7 +391,7 @@ def agent(obs):
         best = None
         best_key = None
         best_plant = False
-        for (x, y) in cluster:
+        for (x, y) in crop_cluster:
             if (x, y) in claimed:
                 continue
             t = tiles[y][x]
@@ -301,29 +429,58 @@ def agent(obs):
     farmer = unit_actions[0]
     hands_out = unit_actions[1:]
 
-    # --- Market: hire each morning; sell high-value produce first; buy seed. ---
+    # =====================================================================
+    # MARKET: hire; buy animals; keep a wheat feed reserve; sell; buy seed.
+    # =====================================================================
     orders = []
     if hour == 0:
         for _ in range(max(0, TARGET_HANDS - len(hands))):
             orders.append(["HIRE"])
 
-    # Sell every shed product, ordered by its current unit price (desc) so scarce
-    # high-value produce clears before cheap wheat within the 10-order budget.
-    inventory = market.get("inventory", {}) or {}
+    # Buy any animals still short of the plan (early game; keep a cash buffer).
+    animal_buys = []
+    if animal_tiles:
+        for animal, count in ANIMAL_PLAN:
+            have = n_placed.get(animal, 0) + int(shed.get(animal, 0))
+            have += sum(int(iv.get(animal, 0)) for iv in inventories if isinstance(iv, dict))
+            deficit = count - have
+            cost = ANIMALS[animal]["cost"]
+            if deficit > 0 and money >= cost + 500:
+                animal_buys.append(["BUY_ANIMAL", animal, deficit])
+                money -= cost * deficit
+
+    # Guarantee wheat feed: top the shed up to the reserve if animals exist/are planned.
+    wheat_reserve = len(animal_tiles) * WHEAT_FEED_RESERVE_DAYS
+    feed_buys = []
+    if wheat_reserve > 0:
+        shed_wheat = int(shed.get("WHEAT", 0))
+        deficit = wheat_reserve - shed_wheat
+        if deficit > 0:
+            price = _market_price("WHEAT", int(inventory.get("WHEAT", 10000)) - 1) or 25
+            if money >= price * deficit:
+                feed_buys.append(["BUY_PRODUCT", "WHEAT", deficit])
+
+    # Sell every shed product, highest unit price first, metered to the demand drains.
+    # Hold back the wheat feed reserve so animals never starve.
     sellable = []
     for item, qty in shed.items():
-        if not (qty and qty > 0 and item in prices):
+        q = int(qty) if qty else 0
+        if q <= 0 or item not in prices:
+            continue
+        if item == "WHEAT" and day < LIQUIDATE_DAY:
+            q = max(0, q - wheat_reserve)
+        if q <= 0:
             continue
         inv0 = inventory.get(item, 10000)
-        sell_qty = _meter_sell_qty(item, int(qty), inv0, day)
+        sell_qty = _meter_sell_qty(item, q, inv0, day)
         if sell_qty > 0:
             sellable.append((float(prices.get(item, 0)), item, sell_qty))
     sellable.sort(reverse=True)
     sells = [["SELL", item, qty] for _, item, qty in sellable]
 
-    # Seed buys: cover the open target slots per crop plus a small buffer.
+    # Seed buys: cover the open crop target slots per crop plus a small buffer.
     want = {}
-    for p in cluster:
+    for p in crop_cluster:
         if tiles[p[1]][p[0]] is None:
             crop = tile_crop.get(p, "WHEAT")
             want[crop] = want.get(crop, 0) + 1
@@ -337,7 +494,7 @@ def agent(obs):
     buys.sort()  # cheaper seeds first (they gate the most tiles)
     buy_orders = [b for _, b in buys]
 
-    # Order budget: HIRE (labor) first, then high-value sells, then seed buys.
-    market_orders = (orders + sells + buy_orders)[:10]
+    # Order budget: labor + animals (setup) first, then feed, high-value sells, seed.
+    market_orders = (orders + animal_buys + feed_buys + sells + buy_orders)[:10]
 
     return {"farmer": farmer, "hands": hands_out, "market": market_orders}
