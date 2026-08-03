@@ -1,0 +1,47 @@
+[
+  {
+    "file": "moon_counts_melons.py",
+    "kernel_ref": "prvsiyan/kaggriculture-frontier-the-moon-counts-melons",
+    "extraction": "agent_source",
+    "sha256": "692c5aa95e65023324cb8ca028e428ee7546fe17ee09e270a1f935914fae472f",
+    "lines": 449,
+    "loads": true,
+    "note": "episode 89674601 distillation (updated 449-line public version)"
+  },
+  {
+    "file": "soil_remembers_rain.py",
+    "kernel_ref": "prvsiyan/kaggriculture-frontier-the-soil-remembers-rain",
+    "extraction": "agent_source",
+    "sha256": "00e8ab594a39779e808dd351d0973260f4c90ddc1370e684fa46eaa184ae4546",
+    "lines": 333,
+    "loads": true,
+    "note": "episode 89674601 distillation == current champion 00e8ab59"
+  },
+  {
+    "file": "kaitofukami_v17_market_ranker.py",
+    "kernel_ref": "kaitofukami/29-30-current-holdout-v17-learned-market-ranker",
+    "extraction": "b85_zlib",
+    "sha256": "d81de06bcb1c32a319b6e08b2ec783875663d62f64cf44c922fa2853d82278cc",
+    "lines": 3413,
+    "loads": true,
+    "note": "learned market ranker v17 (distinct architecture)"
+  },
+  {
+    "file": "pilkwang_economic_control.py",
+    "kernel_ref": "pilkwang/kaggriculture-observable-economic-control",
+    "extraction": "agentfile",
+    "sha256": "505d0681844477d3f9e2655556f880b5b9be1b6c84488650385a9a93f5e15118",
+    "lines": 2175,
+    "loads": true,
+    "note": "observable economic control policy bundle"
+  },
+  {
+    "file": "roman_hamburger_anchor.py",
+    "kernel_ref": "romantamrazov/kaggriculture-hamburger",
+    "extraction": "anchor_blob",
+    "sha256": "c3be7447f79a1c4e0a9fa537b9fbd2eb7ae1a199a09690e7dfdc15da1cb0b5a4",
+    "lines": 167,
+    "loads": true,
+    "note": "Anchor Soil V5 (episode 89674601 lineage, 167-line anchor)"
+  }
+]
