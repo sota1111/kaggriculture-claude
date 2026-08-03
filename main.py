@@ -17,6 +17,11 @@ diagnosis: MILK ≈ $351, WOOL ≈ $247, both scarce with zero supply). MILK (ba
 `sqrt` scarcity) and WOOL (base 200) are the value targets; EGG (base 50, shallow `linear`
 scarcity) is marginal.
 
+SOT-2344 scaled the plan from COW2/SHEEP2 to **COW3/SHEEP3** (6 animals) by fixing the
+feed logistics that made larger plans collapse: the day-0 bulk animal buy used to starve
+the wheat feed reserve, so animals went unfed and escaped. The market pass now reserves
+feed cash first and buys animals staged, one at a time, as crop revenue accrues.
+
 Implementation: a few of the low-value WHEAT tiles (the high-value MELON 10 / STRAWBERRY 8
 allocation is preserved) are converted to COOP / PASTURE structures near the shed. A small
 set of dedicated *rancher* workers builds the structures, buys + places the animals, and
@@ -51,12 +56,21 @@ _BUILD_OP = {"COOP": "BUILD_COOP", "PASTURE": "BUILD_PASTURE"}
 # Chosen by a real-env self-mirror sweep; see the module docstring / measurements.
 PORTFOLIO = [("MELON", 10), ("STRAWBERRY", 8)]
 
-# Animal husbandry plan (SOT-2297): (animal, count). Structures occupy the NW tiles
-# nearest the shed so ranchers tour them cheaply. Swept on the real env; MILK/WOOL are
-# the value targets, EGG (GOOSE) is marginal so kept small or omitted.
-ANIMAL_PLAN = [("COW", 2), ("SHEEP", 2)]
+# Animal husbandry plan: (animal, count). Structures occupy the NW tiles nearest the
+# shed so ranchers tour them cheaply. Swept on the real env; MILK/WOOL are the value
+# targets, EGG (GOOSE) is marginal.
+# SOT-2297 shipped COW2/SHEEP2 because larger plans collapsed (~300-420 self-mirror);
+# SOT-2344 traced that collapse to the *day-0 bulk animal buy* starving the wheat feed
+# reserve (animals unfed 2 days escape) — NOT to a demand limit. With the feed-cash-
+# priority staged buyer below, the symmetric COW3/SHEEP3 plan (6 animals, all survive)
+# is the new optimum: ALL WIN on 20 disjoint seeds vs the COW2/SHEEP2 champion
+# (diff_min +1705..+2250, cand ~53-54.6k vs ~51-52k). Asymmetric 3+2/2+3 plans stay
+# fragile (single-seed collapses) and 7-8 animals (4+3, 4+4, +GOOSE2) over-extend again
+# or hit MILK/WOOL sink saturation (GOOSE only +263). See docs/measurements/SOT-2344.md.
+ANIMAL_PLAN = [("COW", 3), ("SHEEP", 3)]
 N_RANCHERS = 2               # dedicated animal-chore workers (rest patrol crops)
 WHEAT_FEED_RESERVE_DAYS = 3  # shed wheat held back from selling to guarantee feed
+#   (rd>=4 is a fragile cash/feed knife-edge that collapses vs champion — keep at 3)
 
 TARGET_HANDS = 6  # farm hands hired each morning (env resets them nightly)
 SEED_BUFFER = 2   # per-crop seed headroom beyond the open target slots
@@ -437,28 +451,51 @@ def agent(obs):
         for _ in range(max(0, TARGET_HANDS - len(hands))):
             orders.append(["HIRE"])
 
-    # Buy any animals still short of the plan (early game; keep a cash buffer).
+    # Buy animals with FEED-CASH PRIORITY + staging (SOT-2344). An animal that
+    # misses 2 consecutive feed days escapes (env `_daily_refresh_animals`), so a
+    # purchase the farm can't also feed is pure loss. The prior plan bought the whole
+    # ANIMAL_PLAN in one day-0 order (`money >= cost + 500`), which for a 6-animal plan
+    # sank ~$2.7k up front and left too little to buy the wheat feed reserve — every
+    # animal starved and the farm collapsed to ~$500 (self-mirror). Instead: reserve the
+    # cash to buy the wheat feed reserve first, then buy animals ONE AT A TIME,
+    # interleaved across types, only while cash stays above (feed reserve + buffer).
+    # Remaining animals are bought on later days as crop revenue accrues (staging).
+    wheat_price = _market_price("WHEAT", int(inventory.get("WHEAT", 10000)) - 1) or 25
+    wheat_reserve = len(animal_tiles) * WHEAT_FEED_RESERVE_DAYS
+    shed_wheat = int(shed.get("WHEAT", 0))
+    feed_cash = max(0, wheat_reserve - shed_wheat) * wheat_price
+    CASH_BUFFER = 500
+
     animal_buys = []
     if animal_tiles:
+        deficit = {}
         for animal, count in ANIMAL_PLAN:
             have = n_placed.get(animal, 0) + int(shed.get(animal, 0))
             have += sum(int(iv.get(animal, 0)) for iv in inventories if isinstance(iv, dict))
-            deficit = count - have
-            cost = ANIMALS[animal]["cost"]
-            if deficit > 0 and money >= cost + 500:
-                animal_buys.append(["BUY_ANIMAL", animal, deficit])
-                money -= cost * deficit
+            deficit[animal] = max(0, count - have)
+        buy_ct = {a: 0 for a in deficit}
+        progress = True
+        while progress:
+            progress = False
+            for animal, _count in ANIMAL_PLAN:
+                if deficit[animal] - buy_ct[animal] <= 0:
+                    continue
+                cost = ANIMALS[animal]["cost"]
+                if money - cost >= feed_cash + CASH_BUFFER:
+                    money -= cost
+                    buy_ct[animal] += 1
+                    progress = True
+        for animal, _count in ANIMAL_PLAN:
+            if buy_ct[animal] > 0:
+                animal_buys.append(["BUY_ANIMAL", animal, buy_ct[animal]])
 
-    # Guarantee wheat feed: top the shed up to the reserve if animals exist/are planned.
-    wheat_reserve = len(animal_tiles) * WHEAT_FEED_RESERVE_DAYS
+    # Guarantee wheat feed: top the shed up to the reserve (cash reserved above so this
+    # order — queued after the animal buys — still clears on the same turn).
     feed_buys = []
     if wheat_reserve > 0:
-        shed_wheat = int(shed.get("WHEAT", 0))
-        deficit = wheat_reserve - shed_wheat
-        if deficit > 0:
-            price = _market_price("WHEAT", int(inventory.get("WHEAT", 10000)) - 1) or 25
-            if money >= price * deficit:
-                feed_buys.append(["BUY_PRODUCT", "WHEAT", deficit])
+        deficit_w = wheat_reserve - shed_wheat
+        if deficit_w > 0 and money >= wheat_price * deficit_w:
+            feed_buys.append(["BUY_PRODUCT", "WHEAT", deficit_w])
 
     # Sell every shed product, highest unit price first, metered to the demand drains.
     # Hold back the wheat feed reserve so animals never starve.
