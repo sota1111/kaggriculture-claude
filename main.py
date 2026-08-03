@@ -31,6 +31,26 @@ the existing glut-aware seller. The env animal constants (first-yield/interval/m
 wheat feed, care-on-fed-only) are mirrored exactly. Non-rancher workers and the non-animal
 tiles keep the unchanged crop engine. Only `math` is imported so the file runs under
 Kaggle's exec harness (no `__file__`, no cwd use).
+
+SOT-2342 adds **fertilizer synergy**, layered on top of the ranch. Every surviving animal
+emits one free `FERTILIZER` byproduct per day (env sets `fertilizer_available=True` in
+`_daily_refresh_animals`); it was previously wasted. A `FERTILIZE`d plant carries
+`fertilized_until_day = day + 2` (3 active days), and on a *watered* production day the env
+accrues +2 yield instead of +1 (env L384 / L768-769). Only an *ongoing* crop turns that
+into extra harvested units: STRAWBERRY (interval 2, max_yield 4) doubles each of its four
+production events (ages 10/12/14/16), roughly doubling strawberry output. MELON is skipped —
+it is non-ongoing and already reaches its max_yield 6 cap from daily watering alone (7 waters
+in the age 6–12 window ≥ cap 6), so fertilizing it is pure waste. The ranchers collect the
+byproduct as their *lowest* animal-chore priority (below feed/harvest/care, so animals are
+never starved for it) and, with genuine slack, courier it to the nearest in-window
+STRAWBERRY and spray it. Unlike the rejected land expansion (SOT-2299/SOT-2343, which lost
+head-to-head to a free-riding champion because the extra sink cost land+labor+cash), this
+lever wins decisively: it has *zero* capital cost (the fertilizer is free) and only marginal
+rancher labor, and the doubled high-value strawberry beats the shared-sink price depression.
+vs the COW3/SHEEP3 champion: ALL WIN on 20 disjoint seeds (diff_min +8714, ~+9.5k mean, cand
+~60–68k vs champ ~50–58k); self-mirror honest-glut ≈ +8.9k/player symmetric absolute gain
+(so not a head-to-head-only artifact). Guarded by `FERTILIZE_ENABLED`; off ⇒ behavior is
+identical to the prior champion. See docs/measurements/SOT-2342.md.
 """
 
 import math
@@ -74,6 +94,25 @@ WHEAT_FEED_RESERVE_DAYS = 3  # shed wheat held back from selling to guarantee fe
 
 TARGET_HANDS = 6  # farm hands hired each morning (env resets them nightly)
 SEED_BUFFER = 2   # per-crop seed headroom beyond the open target slots
+
+# --- Fertilizer synergy (SOT-2342): collect the free animal FERTILIZER byproduct
+# and spray it on STRAWBERRY to double its per-event yield accrual (1->2). ---
+# Each surviving animal makes 1 FERTILIZER/day (env `_daily_refresh_animals` sets
+# `fertilizer_available=True`), currently wasted. A `FERTILIZE`d PLANT gets
+# `fertilized_until_day=day+2` (3 days active); on a watered production day the env
+# adds +2 instead of +1 yield (env L384 / L768-769). Only ongoing crops benefit at
+# harvest: STRAWBERRY (interval 2, max_yield 4) doubles each of its 4 production
+# events. MELON is a non-ongoing crop that already reaches its max_yield 6 cap from
+# daily watering alone (window ages 6-12 = 7 waters >= cap 6), so fertilizing it is
+# pure waste — excluded. Fertilizer is a FREE byproduct (no capital cost), but it is
+# a SHARED market sink (like SOT-2299 land), so the vs-champion sign gate decides.
+# Guarded by FERTILIZE_ENABLED: with it off the file is behavior-identical to the
+# committed champion (clean revert on non-promotion).
+FERTILIZE_ENABLED = True
+FERT_CROP = "STRAWBERRY"          # the only crop the doubling actually reaches harvest
+FERT_MIN_AGE = 9                  # start spraying just before first_yield_day (10)
+FERT_MAX_AGE = 16                 # last production event age (10,12,14,16)
+FERT_CARRY_CAP = 3                # max FERTILIZER a rancher hoards before delivering
 
 # --- Sell metering (SOT-2298): ration sells to the demand drains, avoid glut. ---
 # Hold back any unit whose marginal sell price would drop below SELL_FLOOR_FRAC · base
@@ -293,6 +332,13 @@ def agent(obs):
                 if t.get("fed_today") and not t.get("cared_today"):
                     claimed.add((fx, fy))
                     return ["CARE"]
+                # Lowest animal-chore priority: pocket the free daily fertilizer
+                # (only while there is unfertilized strawberry demand and carry room).
+                if (FERTILIZE_ENABLED and t.get("fertilizer_available")
+                        and fert_targets
+                        and int(inv_i.get("FERTILIZER", 0)) < FERT_CARRY_CAP):
+                    claimed.add((fx, fy))
+                    return ["COLLECT_FERTILIZER"]
 
         # 2. Restock at the shed when I lack the item a pending chore needs.
         need_feed = any(
@@ -342,7 +388,48 @@ def agent(obs):
         if best is not None:
             claimed.add(best)
             return _step_towards(fx, fy, best[0], best[1])
+
+        # 4. Deliver value: carrying fertilizer -> spray the nearest in-window
+        # STRAWBERRY. Strictly below every animal survival chore above, so animals
+        # are never neglected for fertilizer. Only claim a tile when acting on it
+        # in place (routing must not block a crop worker from watering it).
+        if FERTILIZE_ENABLED and int(inv_i.get("FERTILIZER", 0)) > 0 and fert_targets:
+            if (fx, fy) in fert_targets:
+                claimed.add((fx, fy))
+                return ["FERTILIZE"]
+            best_f, best_fk = None, None
+            for (x, y) in fert_targets:
+                key = abs(x - fx) + abs(y - fy)
+                if best_fk is None or key < best_fk:
+                    best_fk, best_f = key, (x, y)
+            if best_f is not None:
+                return _step_towards(fx, fy, best_f[0], best_f[1])
+
+        # 5. Otherwise route to an animal whose fertilizer byproduct is waiting, but
+        # only while strawberry demand exists and I have room to carry more.
+        if (FERTILIZE_ENABLED and fert_targets
+                and int(inv_i.get("FERTILIZER", 0)) < FERT_CARRY_CAP):
+            best_c, best_ck = None, None
+            for (x, y), animal in animal_assign.items():
+                t = tiles[y][x]
+                if is_animal(t) and t.get("animal") == animal and t.get("fertilizer_available"):
+                    key = abs(x - fx) + abs(y - fy)
+                    if best_ck is None or key < best_ck:
+                        best_ck, best_c = key, (x, y)
+            if best_c is not None:
+                return _step_towards(fx, fy, best_c[0], best_c[1])
         return None
+
+    # STRAWBERRY tiles that would benefit from fertilizer now: a live plant inside
+    # its production age window whose fertilized window has lapsed.
+    fert_targets = set()
+    if FERTILIZE_ENABLED:
+        for (x, y) in crop_cluster:
+            t = tiles[y][x]
+            if (is_plant(t) and t.get("crop") == FERT_CROP
+                    and FERT_MIN_AGE <= crop_age(t) <= FERT_MAX_AGE
+                    and int(t.get("fertilized_until_day", -1)) < day):
+                fert_targets.add((x, y))
 
     ranchers = list(range(max(1, n - N_RANCHERS), n)) if n > 1 else []
     for i in ranchers:
