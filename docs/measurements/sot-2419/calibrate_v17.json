@@ -1,0 +1,191 @@
+{
+  "mode": "calibrate",
+  "seeds": [
+    101,
+    202,
+    7,
+    42,
+    303,
+    404,
+    505,
+    777,
+    1234,
+    2026,
+    5555,
+    9001
+  ],
+  "subjects": {
+    "moon198": {
+      "label": "moon198",
+      "path": "main.py",
+      "sha16": "7c5a4a2a3ba51cc4",
+      "real_lb": 2543.4,
+      "field_wins": 33,
+      "field_games": 120,
+      "field_win_rate": 0.275,
+      "field_diff_mean": -64278.775,
+      "field_diff_min": -179705.0,
+      "per_opp": {
+        "kaitofukami_v17_market_ranker.py": {
+          "opponent": "kaitofukami_v17_market_ranker.py",
+          "label": "kaitofukami_v17_market_ranker.py",
+          "games": 24,
+          "wins": 2,
+          "win_rate": 0.08333333333333333,
+          "diff_min": -12877.0,
+          "diff_mean": -3723.625,
+          "cand_min_money": 87552.0,
+          "cand_mean_money": 124539.66666666667,
+          "opp_mean_money": 128263.29166666667,
+          "sign": "MIXED",
+          "all_done": true
+        },
+        "moon_counts_melons.py": {
+          "opponent": "moon_counts_melons.py",
+          "label": "moon_counts_melons.py",
+          "games": 24,
+          "wins": 0,
+          "win_rate": 0.0,
+          "diff_min": -179705.0,
+          "diff_mean": -169499.29166666666,
+          "cand_min_money": 6881.0,
+          "cand_mean_money": 10367.333333333334,
+          "opp_mean_money": 179866.625,
+          "sign": "ALL LOSE",
+          "all_done": true
+        },
+        "pilkwang_economic_control.py": {
+          "opponent": "pilkwang_economic_control.py",
+          "label": "pilkwang_economic_control.py",
+          "games": 24,
+          "wins": 24,
+          "win_rate": 1.0,
+          "diff_min": 5009.0,
+          "diff_mean": 21328.333333333332,
+          "cand_min_money": 117720.0,
+          "cand_mean_money": 139255.08333333334,
+          "opp_mean_money": 117926.75,
+          "sign": "ALL WIN",
+          "all_done": true
+        },
+        "roman_hamburger_anchor.py": {
+          "opponent": "roman_hamburger_anchor.py",
+          "label": "roman_hamburger_anchor.py",
+          "games": 24,
+          "wins": 7,
+          "win_rate": 0.2916666666666667,
+          "diff_min": -6808.0,
+          "diff_mean": 0.0,
+          "cand_min_money": 92299.0,
+          "cand_mean_money": 126936.66666666667,
+          "opp_mean_money": 126936.66666666667,
+          "sign": "MIXED",
+          "all_done": true
+        },
+        "soil_remembers_rain.py": {
+          "opponent": "soil_remembers_rain.py",
+          "label": "soil_remembers_rain.py",
+          "games": 24,
+          "wins": 0,
+          "win_rate": 0.0,
+          "diff_min": -179705.0,
+          "diff_mean": -169499.29166666666,
+          "cand_min_money": 6881.0,
+          "cand_mean_money": 10367.333333333334,
+          "opp_mean_money": 179866.625,
+          "sign": "ALL LOSE",
+          "all_done": true
+        }
+      }
+    },
+    "kf_v17": {
+      "label": "kf_v17",
+      "path": "cand_v17.py",
+      "sha16": "d81de06bcb1c32a3",
+      "real_lb": null,
+      "field_wins": 62,
+      "field_games": 96,
+      "field_win_rate": 0.6458333333333334,
+      "field_diff_mean": 5780.458333333333,
+      "field_diff_min": -10641.0,
+      "per_opp": {
+        "moon_counts_melons.py": {
+          "opponent": "moon_counts_melons.py",
+          "label": "moon_counts_melons.py",
+          "games": 24,
+          "wins": 3,
+          "win_rate": 0.125,
+          "diff_min": -10641.0,
+          "diff_mean": -3865.2083333333335,
+          "cand_min_money": 87467.0,
+          "cand_mean_money": 124920.04166666667,
+          "opp_mean_money": 128785.25,
+          "sign": "MIXED",
+          "all_done": true
+        },
+        "pilkwang_economic_control.py": {
+          "opponent": "pilkwang_economic_control.py",
+          "label": "pilkwang_economic_control.py",
+          "games": 24,
+          "wins": 24,
+          "win_rate": 1.0,
+          "diff_min": 9443.0,
+          "diff_mean": 23172.416666666668,
+          "cand_min_money": 125171.0,
+          "cand_mean_money": 144385.70833333334,
+          "opp_mean_money": 121213.29166666667,
+          "sign": "ALL WIN",
+          "all_done": true
+        },
+        "roman_hamburger_anchor.py": {
+          "opponent": "roman_hamburger_anchor.py",
+          "label": "roman_hamburger_anchor.py",
+          "games": 24,
+          "wins": 22,
+          "win_rate": 0.9166666666666666,
+          "diff_min": -6423.0,
+          "diff_mean": 3723.625,
+          "cand_min_money": 91310.0,
+          "cand_mean_money": 128263.29166666667,
+          "opp_mean_money": 124539.66666666667,
+          "sign": "MIXED",
+          "all_done": true
+        },
+        "soil_remembers_rain.py": {
+          "opponent": "soil_remembers_rain.py",
+          "label": "soil_remembers_rain.py",
+          "games": 24,
+          "wins": 13,
+          "win_rate": 0.5416666666666666,
+          "diff_min": -5712.0,
+          "diff_mean": 91.0,
+          "cand_min_money": 91244.0,
+          "cand_mean_money": 127835.25,
+          "opp_mean_money": 127744.25,
+          "sign": "MIXED",
+          "all_done": true
+        }
+      }
+    }
+  },
+  "comparisons": [
+    {
+      "a": "moon198",
+      "b": "kf_v17",
+      "common_opponents": [
+        "moon_counts_melons.py",
+        "pilkwang_economic_control.py",
+        "roman_hamburger_anchor.py",
+        "soil_remembers_rain.py"
+      ],
+      "a_win_rate": 0.3229166666666667,
+      "b_win_rate": 0.6458333333333334,
+      "a_diff_mean": -79417.5625,
+      "b_diff_mean": 5780.458333333333,
+      "a_lb": 2543.4,
+      "b_lb": null,
+      "field_delta_a_minus_b": -85198.02083333333
+    }
+  ],
+  "calibrated": false
+}

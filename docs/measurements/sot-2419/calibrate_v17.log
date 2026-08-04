@@ -1,0 +1,30 @@
+# CALIBRATE :: subjects=['moon198', 'kf_v17'] :: seeds=[101, 202, 7, 42, 303, 404, 505, 777, 1234, 2026, 5555, 9001] :: opponents=5
+[kaggle_environments.envs.open_spiel_env.open_spiel_env] INFO: Successfully loaded OpenSpiel environments: 41.
+[kaggle_environments.envs.open_spiel_env.open_spiel_env] INFO: OpenSpiel games skipped: 0.
+
+== subject moon198 (sha 7c5a4a2a3ba51cc4, real_lb=2543.4) ==
+  vs kaitofukami_v17_market_ranker.py        2/24 (  8.3%)  diff_mean=    -3723.6  MIXED
+  vs moon_counts_melons.py                   0/24 (  0.0%)  diff_mean=  -169499.3  ALL LOSE
+  vs pilkwang_economic_control.py           24/24 (100.0%)  diff_mean=   +21328.3  ALL WIN
+  vs roman_hamburger_anchor.py               7/24 ( 29.2%)  diff_mean=       +0.0  MIXED
+  vs soil_remembers_rain.py                  0/24 (  0.0%)  diff_mean=  -169499.3  ALL LOSE
+  -> FULL field 33/120 = 27.5%  diff_mean=-64278.8  diff_min=-179705.0
+
+== subject kf_v17 (sha d81de06bcb1c32a3, real_lb=None) ==
+  vs moon_counts_melons.py                   3/24 ( 12.5%)  diff_mean=    -3865.2  MIXED
+  vs pilkwang_economic_control.py           24/24 (100.0%)  diff_mean=   +23172.4  ALL WIN
+  vs roman_hamburger_anchor.py              22/24 ( 91.7%)  diff_mean=    +3723.6  MIXED
+  vs soil_remembers_rain.py                 13/24 ( 54.2%)  diff_mean=      +91.0  MIXED
+  -> FULL field 62/96 = 64.6%  diff_mean=+5780.5  diff_min=-10641.0
+
+#### PAIRWISE COMMON-FIELD COMPARISONS ####
+
+  [moon198] vs [kf_v17] on common field ['moon_counts_melons.py', 'pilkwang_economic_control.py', 'roman_hamburger_anchor.py', 'soil_remembers_rain.py']:
+    moon198: 31/96=32.3%  diff_mean=-79417.6
+    kf_v17: 62/96=64.6%  diff_mean=+5780.5
+
+#### CALIBRATION VERDICT ####
+  LB-anchored pairs checked: 0  monotone: 0/0
+  CALIBRATED = False  (league does NOT reproduce real-LB ordering — oracle still unreliable)
+
+# wrote docs/measurements/sot-2419/calibrate_v17.json
