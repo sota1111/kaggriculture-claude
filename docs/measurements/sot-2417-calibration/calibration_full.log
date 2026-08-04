@@ -1,0 +1,46 @@
+# CALIBRATE :: subjects=['moon198', 'soil', 'moon449'] :: seeds=[101, 202, 7, 42, 303, 404, 505, 777, 1234, 2026, 5555, 9001] :: opponents=5
+[kaggle_environments.envs.open_spiel_env.open_spiel_env] INFO: Successfully loaded OpenSpiel environments: 41.
+[kaggle_environments.envs.open_spiel_env.open_spiel_env] INFO: OpenSpiel games skipped: 0.
+
+== subject moon198 (sha 7c5a4a2a3ba51cc4, real_lb=2543.4) ==
+  vs kaitofukami_v17_market_ranker.py        2/24 (  8.3%)  diff_mean=    -3723.6  MIXED
+  vs moon_counts_melons.py                   0/24 (  0.0%)  diff_mean=  -169499.3  ALL LOSE
+  vs pilkwang_economic_control.py           24/24 (100.0%)  diff_mean=   +21328.3  ALL WIN
+  vs roman_hamburger_anchor.py               7/24 ( 29.2%)  diff_mean=       +0.0  MIXED
+  vs soil_remembers_rain.py                  0/24 (  0.0%)  diff_mean=  -169499.3  ALL LOSE
+  -> FULL field 33/120 = 27.5%  diff_mean=-64278.8  diff_min=-179705.0
+
+== subject soil (sha 00e8ab594a39779e, real_lb=600.0) ==
+  vs kaitofukami_v17_market_ranker.py       11/24 ( 45.8%)  diff_mean=      -91.0  MIXED
+  vs moon_counts_melons.py                   3/24 ( 12.5%)  diff_mean=    -4117.7  MIXED
+  vs pilkwang_economic_control.py           24/24 (100.0%)  diff_mean=   +21811.4  ALL WIN
+  vs roman_hamburger_anchor.py              24/24 (100.0%)  diff_mean=  +169499.3  ALL WIN
+  -> FULL field 62/96 = 64.6%  diff_mean=+46775.5  diff_min=-10498.0
+
+== subject moon449 (sha 692c5aa95e650233, real_lb=None) ==
+  vs kaitofukami_v17_market_ranker.py       21/24 ( 87.5%)  diff_mean=    +3865.2  MIXED
+  vs pilkwang_economic_control.py           24/24 (100.0%)  diff_mean=   +21811.4  ALL WIN
+  vs roman_hamburger_anchor.py              24/24 (100.0%)  diff_mean=  +169499.3  ALL WIN
+  vs soil_remembers_rain.py                 21/24 ( 87.5%)  diff_mean=    +4117.7  MIXED
+  -> FULL field 90/96 = 93.8%  diff_mean=+49823.4  diff_min=-2507.0
+
+#### PAIRWISE COMMON-FIELD COMPARISONS ####
+
+  [moon198] vs [soil] on common field ['kaitofukami_v17_market_ranker.py', 'moon_counts_melons.py', 'pilkwang_economic_control.py', 'roman_hamburger_anchor.py']:
+    moon198: 33/96=34.4%  diff_mean=-37973.6
+    soil: 62/96=64.6%  diff_mean=+46775.5
+    real_lb: moon198=2543.4 soil=600.0 (a>b) | field: (a<b) -> CONTRADICTS real-LB order
+
+  [moon198] vs [moon449] on common field ['kaitofukami_v17_market_ranker.py', 'pilkwang_economic_control.py', 'roman_hamburger_anchor.py', 'soil_remembers_rain.py']:
+    moon198: 33/96=34.4%  diff_mean=-37973.6
+    moon449: 90/96=93.8%  diff_mean=+49823.4
+
+  [soil] vs [moon449] on common field ['kaitofukami_v17_market_ranker.py', 'pilkwang_economic_control.py', 'roman_hamburger_anchor.py']:
+    soil: 59/72=81.9%  diff_mean=+63739.9
+    moon449: 69/72=95.8%  diff_mean=+65058.6
+
+#### CALIBRATION VERDICT ####
+  LB-anchored pairs checked: 1  monotone: 0/1
+  CALIBRATED = False  (league does NOT reproduce real-LB ordering — oracle still unreliable)
+
+# wrote docs/measurements/sot-2417-calibration/calibration_full.json
